@@ -6,6 +6,13 @@ from datetime import datetime, date
 import os
 import time
 
+from datetime import datetime
+from zoneinfo import ZoneInfo  # built-in in Python 3.9+
+
+now = datetime.now(ZoneInfo("Asia/Kolkata"))
+st.write("Current time:", now.strftime("%Y-%m-%d %H:%M:%S"))
+
+
 FILE = "oi_history_change.csv"
 
 # --------------------------------------------
