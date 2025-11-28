@@ -19,21 +19,8 @@ st.set_page_config(page_title="Digi OI Tracker", layout="wide")
 st.title("📊 Digi OI Tracker")
 st.caption("Track ATM 5 Strike OI & OI Change (Auto-refresh every 3 min, HTML fallback enabled)")
 
-now = datetime.now(TIMEZONE)
-st.write("Current time (IST):", now.strftime("%Y-%m-%d %H:%M:%S"))
-
 # -----------------------------------
-# Auto refresh
-# -----------------------------------
-if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = time.time()
-
-if time.time() - st.session_state.last_refresh > AUTO_REFRESH_INTERVAL:
-    st.session_state.last_refresh = time.time()
-    st.experimental_rerun()
-
-# -----------------------------------
-# Load history
+# LOAD HISTORY
 # -----------------------------------
 def load_history():
     if os.path.exists(FILE):
@@ -49,6 +36,34 @@ def save_history(df):
     df.to_csv(FILE, index=False)
 
 history_df = load_history()
+
+# -----------------------------------
+# LIVE MARKET SENTIMENT AT TOP
+# -----------------------------------
+if history_df.empty:
+    st.info("Market sentiment will appear here once data is loaded.")
+else:
+    last_snapshot = history_df.iloc[-1]
+    if last_snapshot["CE_change"] > last_snapshot["PE_change"]:
+        st.success("🚀 Market Sentiment: BULLISH / UP-SIDE")
+    else:
+        st.error("🐻 Market Sentiment: BEARISH / DOWN-SIDE")
+
+# -----------------------------------
+# CURRENT TIME
+# -----------------------------------
+now = datetime.now(TIMEZONE)
+st.write("Current time (IST):", now.strftime("%Y-%m-%d %H:%M:%S"))
+
+# -----------------------------------
+# Auto refresh
+# -----------------------------------
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
+if time.time() - st.session_state.last_refresh > AUTO_REFRESH_INTERVAL:
+    st.session_state.last_refresh = time.time()
+    st.experimental_rerun()
 
 # -----------------------------------
 # NSE API fetch
