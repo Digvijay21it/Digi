@@ -55,10 +55,28 @@ if history_df.empty:
     st.info("Market sentiment will appear here once data is loaded.")
 else:
     last_snapshot = history_df.iloc[-1]
-    if last_snapshot["CE_change"] > last_snapshot["PE_change"]:
-        st.success(f"🚀 Market Sentiment: BULLISH / UP-SIDE (CE: {last_snapshot['CE_change']}, PE: {last_snapshot['PE_change']})")
+    CE_change = last_snapshot["CE_change"]
+    PE_change = last_snapshot["PE_change"]
+    
+    # Calculate percentage difference safely
+    total_change = abs(CE_change) + abs(PE_change)
+    if total_change != 0:
+        CE_pct = round(CE_change / total_change * 100, 2)
+        PE_pct = round(PE_change / total_change * 100, 2)
     else:
-        st.error(f"🐻 Market Sentiment: BEARISH / DOWN-SIDE (CE: {last_snapshot['CE_change']}, PE: {last_snapshot['PE_change']})")
+        CE_pct = PE_pct = 0
+    
+    # Market sentiment message
+    if CE_change > PE_change:
+        sentiment_msg = f"🚀 Market Sentiment: BULLISH / UP-SIDE\nCE: {CE_change} ({CE_pct}%), PE: {PE_change} ({PE_pct}%)"
+        st.success(sentiment_msg)
+    else:
+        sentiment_msg = f"🐻 Market Sentiment: BEARISH / DOWN-SIDE\nCE: {CE_change} ({CE_pct}%), PE: {PE_change} ({PE_pct}%)"
+        st.error(sentiment_msg)
+    
+    # How much data captured today
+    captured_points = len(history_df)
+    st.info(f"📊 Data points captured today: {captured_points}")
 
 # -----------------------------------
 # Auto refresh
