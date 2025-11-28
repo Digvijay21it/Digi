@@ -38,6 +38,17 @@ def save_history(df):
 history_df = load_history()
 
 # -----------------------------------
+# CURRENT TIME
+# -----------------------------------
+now = datetime.now(TIMEZONE)
+st.write("Current time (IST):", now.strftime("%Y-%m-%d %H:%M:%S"))
+
+# Market hours
+market_start = dt_time(9, 10)
+market_end = dt_time(16, 0)
+is_market_open = market_start <= now.time() <= market_end
+
+# -----------------------------------
 # LIVE MARKET SENTIMENT AT TOP
 # -----------------------------------
 if history_df.empty:
@@ -45,15 +56,9 @@ if history_df.empty:
 else:
     last_snapshot = history_df.iloc[-1]
     if last_snapshot["CE_change"] > last_snapshot["PE_change"]:
-        st.success("🚀 Market Sentiment: BULLISH / UP-SIDE")
+        st.success(f"🚀 Market Sentiment: BULLISH / UP-SIDE (CE: {last_snapshot['CE_change']}, PE: {last_snapshot['PE_change']})")
     else:
-        st.error("🐻 Market Sentiment: BEARISH / DOWN-SIDE")
-
-# -----------------------------------
-# CURRENT TIME
-# -----------------------------------
-now = datetime.now(TIMEZONE)
-st.write("Current time (IST):", now.strftime("%Y-%m-%d %H:%M:%S"))
+        st.error(f"🐻 Market Sentiment: BEARISH / DOWN-SIDE (CE: {last_snapshot['CE_change']}, PE: {last_snapshot['PE_change']})")
 
 # -----------------------------------
 # Auto refresh
@@ -156,7 +161,6 @@ elif source == "HTML":
     st.success("Data received from NSE HTML fallback (EOD supported)")
     df = data
 
-    # HTML format detection
     df.columns = df.columns.droplevel() if isinstance(df.columns, pd.MultiIndex) else df.columns
     df = df.rename(columns={
         "Strike Price": "strike",
@@ -175,7 +179,7 @@ elif source == "HTML":
     df_atm = df.sort_values("diff").head(5)
 
 # -----------------------------------
-# SAVE SNAPSHOT (CHANGE + TOTAL OI)
+# SAVE SNAPSHOT (ONLY DURING MARKET HOURS)
 # -----------------------------------
 current_time = now.strftime("%H:%M")
 today = str(now.date())
@@ -189,9 +193,10 @@ snapshot = {
     "PE_OI_total": df_atm["PE_OI"].sum()
 }
 
-if history_df.empty or history_df["time"].iloc[-1] != current_time:
-    history_df = pd.concat([history_df, pd.DataFrame([snapshot])], ignore_index=True)
-    save_history(history_df)
+if is_market_open:
+    if history_df.empty or history_df["time"].iloc[-1] != current_time:
+        history_df = pd.concat([history_df, pd.DataFrame([snapshot])], ignore_index=True)
+        save_history(history_df)
 
 # -----------------------------------
 # SHOW METRICS
