@@ -88,7 +88,7 @@ cols[2].metric("SENSEX", f"{sensex}" if sensex else "N/A", f"{pct_sensex:+.2f}%"
 st.markdown("---")
 
 # ====================================================================
-#          🔥 REPLACED SECTION — NEW ATM COMPARISON LOGIC
+#          🔥 REPLACED ATM SECTION — NEW LOGIC WITH FIX
 # ====================================================================
 st.header("📈 ATM Normalized Movement (NIFTY vs CE vs PE)")
 
@@ -105,49 +105,56 @@ def get_atm_prices():
 
         underlying = data["records"]["underlyingValue"]
         expiry = data["records"]["expiryDates"][0]
-
         atm_strike = int(round(underlying / 50) * 50)
 
         for r in data["records"]["data"]:
             if r.get("strikePrice") == atm_strike and r.get("expiryDate") == expiry:
                 return underlying, r["CE"]["lastPrice"], r["PE"]["lastPrice"]
-        return None, None, None
 
+        return None, None, None
     except:
         return None, None, None
 
-# -------- Update intraday history --------
+# -------- Update intraday history (with after-market fix) --------
 def update_atm_history():
     now = datetime.now(IST)
 
-    # Market hours only
-    if not (now.hour >= 9 and (now.hour < 15 or (now.hour == 15 and now.minute <= 30))):
-        return pd.DataFrame()
-
-    underlying, ce, pe = get_atm_prices()
-    if underlying is None:
-        return pd.DataFrame()
-
-    entry = {
-        "time": now,
-        "NIFTY": underlying,
-        "CE": ce,
-        "PE": pe
-    }
-
+    # Load existing history if present
     if os.path.exists(CSV_FILE_ATM):
-        df = pd.read_csv(CSV_FILE_ATM, parse_dates=["time"])
-        df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+        df_existing = pd.read_csv(CSV_FILE_ATM, parse_dates=["time"])
     else:
-        df = pd.DataFrame([entry])
+        df_existing = pd.DataFrame()
 
-    df.to_csv(CSV_FILE_ATM, index=False)
-    return df
+    # Market hours check
+    market_open = (now.hour >= 9 and (now.hour < 15 or (now.hour == 15 and now.minute <= 30)))
+
+    if market_open:
+        underlying, ce, pe = get_atm_prices()
+        if underlying is None:
+            return df_existing  # return old data instead of empty
+
+        entry = {
+            "time": now,
+            "NIFTY": underlying,
+            "CE": ce,
+            "PE": pe
+        }
+
+        if not df_existing.empty:
+            df = pd.concat([df_existing, pd.DataFrame([entry])], ignore_index=True)
+        else:
+            df = pd.DataFrame([entry])
+
+        df.to_csv(CSV_FILE_ATM, index=False)
+        return df
+
+    # AFTER MARKET CLOSE → return last available data
+    return df_existing
 
 df_atm = update_atm_history()
 
 if df_atm.empty:
-    st.warning("Waiting for market time or unable to fetch ATM data.")
+    st.error("No ATM data available for today.")
 else:
     # ---- Normalize to 0 at 9:15 ----
     df_norm = df_atm.copy()
@@ -173,6 +180,7 @@ else:
     col[2].metric("ATM PE Movement", f"{latest['PE_norm']:.2f}")
 
 st.markdown("---")
+
 
 # ====================================================================
 #                     ORIGINAL OI TRACKER BELOW (UNTOUCHED)
