@@ -88,95 +88,94 @@ cols[2].metric("SENSEX", f"{sensex}" if sensex else "N/A", f"{pct_sensex:+.2f}%"
 st.markdown("---")
 
 # ====================================================================
-#          🔥 ATM 5 CE * SUM & PE * SUM (Premium Comparison)
+#          🔥 REPLACED SECTION — NEW ATM COMPARISON LOGIC
 # ====================================================================
-st.header("📈 ATM 5 TOTAL CE/PE PREMIUM (Current Week)")
+st.header("📈 ATM Normalized Movement (NIFTY vs CE vs PE)")
 
 today = datetime.now(IST).date()
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
-CSV_FILE = os.path.join(DATA_DIR, f"atm5_sum_{today}.csv")
+CSV_FILE_ATM = os.path.join(DATA_DIR, f"atm_compare_{today}.csv")
 
-def get_spot_price():
+# -------- Get ATM Strike Details --------
+def get_atm_prices():
     try:
-        r = session.get("https://www.nseindia.com/api/allIndices", timeout=5).json()
-        for idx in r["data"]:
-            if idx["index"] == "NIFTY 50":
-                return float(idx["last"])
-    except:
-        return None
+        url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
+        data = session.get(url, timeout=5).json()
 
-def get_atm5_sum(symbol="NIFTY"):
-    spot = get_spot_price()
-    if spot is None:
-        return None, None
-
-    try:
-        data = session.get(
-            f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}",
-            timeout=5
-        ).json()
-
-        records = data["records"]["data"]
+        underlying = data["records"]["underlyingValue"]
         expiry = data["records"]["expiryDates"][0]
 
-        atm_strike = int(round(spot / 50) * 50)
+        atm_strike = int(round(underlying / 50) * 50)
 
-        rows = [
-            r for r in records 
-            if r.get("expiryDate") == expiry and r.get("CE") and r.get("PE")
-        ]
-
-        rows.sort(key=lambda x: abs(x["strikePrice"] - atm_strike))
-
-        atm_5 = rows[:5]
-
-        total_ce = sum(r["CE"]["lastPrice"] for r in atm_5)
-        total_pe = sum(r["PE"]["lastPrice"] for r in atm_5)
-
-        return total_ce, total_pe
+        for r in data["records"]["data"]:
+            if r.get("strikePrice") == atm_strike and r.get("expiryDate") == expiry:
+                return underlying, r["CE"]["lastPrice"], r["PE"]["lastPrice"]
+        return None, None, None
 
     except:
-        return None, None
+        return None, None, None
 
-# --------- UPDATE HISTORY ---------
-def update_sum_history():
-    ce_sum, pe_sum = get_atm5_sum()
-    if ce_sum is None:
+# -------- Update intraday history --------
+def update_atm_history():
+    now = datetime.now(IST)
+
+    # Market hours only
+    if not (now.hour >= 9 and (now.hour < 15 or (now.hour == 15 and now.minute <= 30))):
+        return pd.DataFrame()
+
+    underlying, ce, pe = get_atm_prices()
+    if underlying is None:
         return pd.DataFrame()
 
     entry = {
-        "time": datetime.now(IST),
-        "CE_Sum": ce_sum,
-        "PE_Sum": pe_sum
+        "time": now,
+        "NIFTY": underlying,
+        "CE": ce,
+        "PE": pe
     }
 
-    if os.path.exists(CSV_FILE):
-        df = pd.read_csv(CSV_FILE, parse_dates=["time"])
+    if os.path.exists(CSV_FILE_ATM):
+        df = pd.read_csv(CSV_FILE_ATM, parse_dates=["time"])
         df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
     else:
         df = pd.DataFrame([entry])
 
-    df.to_csv(CSV_FILE, index=False)
+    df.to_csv(CSV_FILE_ATM, index=False)
     return df
 
-df_sum = update_sum_history()
+df_atm = update_atm_history()
 
-if df_sum.empty:
-    st.error("Unable to fetch option chain data")
+if df_atm.empty:
+    st.warning("Waiting for market time or unable to fetch ATM data.")
 else:
-    latest = df_sum.iloc[-1]
+    # ---- Normalize to 0 at 9:15 ----
+    df_norm = df_atm.copy()
 
-    st.metric("Total CE Premium (ATM 5)", f"₹{latest['CE_Sum']:.2f}")
-    st.metric("Total PE Premium (ATM 5)", f"₹{latest['PE_Sum']:.2f}")
+    base_n = df_norm["NIFTY"].iloc[0]
+    base_ce = df_norm["CE"].iloc[0]
+    base_pe = df_norm["PE"].iloc[0]
 
-    st.write("### 📈 ATM 5 Premium Sum Chart (CE vs PE)")
-    st.line_chart(df_sum.set_index("time")[["CE_Sum", "PE_Sum"]])
+    df_norm["NIFTY_norm"] = (df_norm["NIFTY"] - base_n).abs()
+    df_norm["CE_norm"] = (df_norm["CE"] - base_ce).abs()
+    df_norm["PE_norm"] = (df_norm["PE"] - base_pe).abs()
+
+    st.subheader("📉 Normalized Movement from 9:15 AM (Positive Movement Only)")
+
+    st.line_chart(
+        df_norm.set_index("time")[["NIFTY_norm", "CE_norm", "PE_norm"]]
+    )
+
+    latest = df_norm.iloc[-1]
+    col = st.columns(3)
+    col[0].metric("NIFTY Movement", f"{latest['NIFTY_norm']:.2f}")
+    col[1].metric("ATM CE Movement", f"{latest['CE_norm']:.2f}")
+    col[2].metric("ATM PE Movement", f"{latest['PE_norm']:.2f}")
 
 st.markdown("---")
 
 # ====================================================================
-#                     ORIGINAL OI TRACKER BELOW
+#                     ORIGINAL OI TRACKER BELOW (UNTOUCHED)
 # ====================================================================
 st.header("📊 ATM 5 Strike OI Tracker")
 OI_FILE = "oi_history_change.csv"
