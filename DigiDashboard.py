@@ -7,42 +7,21 @@ from datetime import datetime
 import pytz
 import os
 
-# -----------------------------------------------------
-# TIMEZONE FIX
-# -----------------------------------------------------
+# ---------------- TIMEZONE ----------------
 IST = pytz.timezone("Asia/Kolkata")
 
-# -----------------------------------------------------
-# STREAMLIT CONFIG
-# -----------------------------------------------------
+# ---------------- STREAMLIT CONFIG ----------------
 st.set_page_config(page_title="Combined Market Dashboard", layout="wide")
+st_autorefresh(interval=180000, key="autorefresh")  # Refresh every 3 minutes
 
-# -----------------------------------------------------
-# AUTO REFRESH: EVERY 3 MINUTES
-# -----------------------------------------------------
-st_autorefresh(interval=180000, key="autorefresh")
+# ---------------- NSE SESSION ----------------
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json",
+})
 
-# -----------------------------------------------------
-# CREATE NSE SESSION
-# -----------------------------------------------------
-def get_nse_session():
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
-    try:
-        s.get("https://www.nseindia.com", timeout=5)
-    except:
-        pass
-    return s
-
-session = get_nse_session()
-
-# -----------------------------------------------------
-# STOCK DETAILS
-# -----------------------------------------------------
+# ---------------- STOCKS ----------------
 STOCKS = {
     "Reliance": "RELIANCE",
     "HDFC Bank": "HDFCBANK",
@@ -59,16 +38,11 @@ def get_stock_details(symbol):
         res = session.get(url, timeout=5).json()
         last = res["priceInfo"].get("lastPrice")
         openp = res["priceInfo"].get("open")
-        if last is None or openp is None:
-            return None, None
-        pct = ((last - openp) / openp) * 100 if openp else None
+        pct = ((last - openp)/openp*100) if last and openp else None
         return last, pct
     except:
         return None, None
 
-# -----------------------------------------------------
-# INDEX DETAILS
-# -----------------------------------------------------
 def get_index_details(index_name):
     try:
         r = session.get("https://www.nseindia.com/api/allIndices", timeout=5).json()
@@ -76,9 +50,7 @@ def get_index_details(index_name):
             if idx["index"] == index_name:
                 last = idx.get("last")
                 openp = idx.get("open")
-                if last is None or openp is None:
-                    return None, None
-                pct = ((last - openp) / openp) * 100 if openp else None
+                pct = ((last - openp)/openp*100) if last and openp else None
                 return last, pct
     except:
         return None, None
@@ -88,16 +60,12 @@ def get_sensex_details():
         r = requests.get("https://api.bseindia.com/BseIndiaAPI/api/MktStat1/w", timeout=5).json()
         last = r["Sensex"].get("Curvalue")
         openp = r["Sensex"].get("Openvalue")
-        if last is None or openp is None:
-            return None, None
-        pct = ((last - openp) / openp) * 100
+        pct = ((last - openp)/openp*100) if last and openp else None
         return last, pct
     except:
         return None, None
 
-# -----------------------------------------------------
-# TOP BANNER
-# -----------------------------------------------------
+# ---------------- TOP BANNER ----------------
 st.title("📊 Combined Market Dashboard")
 st.subheader("📌 Live Stock & Index Prices (Auto-refresh every 3 minutes)")
 
@@ -105,11 +73,8 @@ cols = st.columns(4)
 i = 0
 for name, symbol in STOCKS.items():
     last, pct = get_stock_details(symbol)
-    if last is not None and pct is not None:
-        cols[i].metric(name, f"₹{last}", f"{pct:+.2f}%")
-    else:
-        cols[i].metric(name, "N/A", "N/A")
-    i = (i + 1) % 4
+    cols[i].metric(name, f"₹{last}" if last else "N/A", f"{pct:+.2f}%" if pct else "N/A")
+    i = (i+1)%4
 
 nifty, pct_nifty = get_index_details("NIFTY 50")
 banknifty, pct_bank = get_index_details("NIFTY BANK")
@@ -122,33 +87,15 @@ cols[2].metric("SENSEX", f"{sensex}" if sensex else "N/A", f"{pct_sensex:+.2f}%"
 
 st.markdown("---")
 
-# -----------------------------------------------------
-# OPTION MOMENTUM DELTA (5 ATM, CURRENT WEEK)
-# -----------------------------------------------------
-st.header("📈 Option Momentum (5 ATM, Current Week)")
+# ---------------- ATM 5 CE/PE PREMIUMS ----------------
+st.header("📈 ATM 5 CE/PE Premiums (Current Week)")
 
 today = datetime.now(IST).date()
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
-CSV_FILE = os.path.join(DATA_DIR, f"nifty_data_{today}.csv")
+CSV_FILE = os.path.join(DATA_DIR, f"atm5_premiums_{today}.csv")
 
-# ---------- SESSION STATE ----------
-if "opt_history" not in st.session_state:
-    if os.path.exists(CSV_FILE):
-        st.session_state.opt_history = pd.read_csv(CSV_FILE, parse_dates=["time"]).to_dict("records")
-    else:
-        st.session_state.opt_history = []
-
-if "open_spot" not in st.session_state:
-    st.session_state.open_spot = None
-if "open_ce" not in st.session_state:
-    st.session_state.open_ce = None
-if "open_pe" not in st.session_state:
-    st.session_state.open_pe = None
-
-# ---------------- FUNCTIONS ----------------
 def get_spot_price():
-    """Get current NIFTY 50 spot price"""
     try:
         r = session.get("https://www.nseindia.com/api/allIndices", timeout=5).json()
         for idx in r["data"]:
@@ -157,90 +104,80 @@ def get_spot_price():
     except:
         return None
 
-def get_atm_5_option_lastprice(symbol="NIFTY"):
-    """Fetch lastPrice for 5 ATM strikes (CE + PE) of current week expiry"""
+def get_atm_5_premiums(symbol="NIFTY"):
     spot = get_spot_price()
     if spot is None:
         return []
-
     try:
         data = session.get(f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}", timeout=5).json()
         records = data["records"]["data"]
-        current_week_expiry = data["records"]["expiryDates"][0]
+        expiry = data["records"]["expiryDates"][0]
 
-        # Filter for current week expiry and valid CE/PE
-        rows = [r for r in records if r.get("expiryDate") == current_week_expiry and r.get("CE") and r.get("PE")]
-
-        # Determine ATM strike and select 5 closest strikes
-        atm_strike = int(round(spot / 50) * 50)
-        rows.sort(key=lambda x: abs(x["strikePrice"] - atm_strike))
+        rows = [r for r in records if r.get("expiryDate")==expiry and r.get("CE") and r.get("PE")]
+        atm_strike = int(round(spot/50)*50)
+        rows.sort(key=lambda x: abs(x["strikePrice"]-atm_strike))
         atm_5 = rows[:5]
 
-        prices = []
+        premiums = []
         for r in atm_5:
-            prices.append({
+            premiums.append({
+                "time": datetime.now(IST),
                 "strike": r["strikePrice"],
-                "CE": float(r["CE"]["lastPrice"]) if r["CE"]["lastPrice"] is not None else 0,
-                "PE": float(r["PE"]["lastPrice"]) if r["PE"]["lastPrice"] is not None else 0
+                "CE": r["CE"]["lastPrice"],
+                "PE": r["PE"]["lastPrice"]
             })
-        return prices
+        return premiums
     except:
         return []
 
-def update_option_history_atm5():
-    atm_prices = get_atm_5_option_lastprice("NIFTY")
-    if not atm_prices:
-        return
+def update_premium_history():
+    atm_5 = get_atm_5_premiums()
+    if not atm_5:
+        return pd.DataFrame()
+    df = pd.DataFrame(atm_5)
+    if os.path.exists(CSV_FILE):
+        df_history = pd.read_csv(CSV_FILE, parse_dates=["time"])
+        df = pd.concat([df_history, df], ignore_index=True)
+    df.to_csv(CSV_FILE, index=False)
+    return df
 
-    spot = get_spot_price()
-    if spot is None:
-        return
+# Update and display
+spot_price = get_spot_price()
+if spot_price:
+    st.metric("NIFTY 50 Spot Price", f"₹{spot_price}")
 
-    # Initialize first open values
-    if st.session_state.open_spot is None:
-        st.session_state.open_spot = spot
-        st.session_state.open_ce = sum([x["CE"] for x in atm_prices])
-        st.session_state.open_pe = sum([x["PE"] for x in atm_prices])
+df_history = update_premium_history()
 
-    # Compute deltas
-    spot_delta = spot - st.session_state.open_spot
-    ce_delta = sum([x["CE"] for x in atm_prices]) - st.session_state.open_ce
-    pe_delta = sum([x["PE"] for x in atm_prices]) - st.session_state.open_pe
-    pe_delta = abs(pe_delta)  # Make positive
+if df_history.empty:
+    st.write("Failed to fetch option chain data.")
+else:
+    latest = df_history.groupby("strike").last().reset_index()
+    st.subheader("📌 Latest ATM 5 CE/PE Premiums")
+    st.dataframe(latest[["strike","CE","PE"]])
 
-    # Append to session history
-    st.session_state.opt_history.append({
-        "time": datetime.now(IST),
-        "spot_delta": spot_delta,
-        "ce_delta": ce_delta,
-        "pe_delta": pe_delta
-    })
-
-    # Save to CSV
-    pd.DataFrame(st.session_state.opt_history).to_csv(CSV_FILE, index=False)
-
-# ---------------- UPDATE HISTORY ----------------
-update_option_history_atm5()
-
-# ---------------- DISPLAY ----------------
-df_opt = pd.DataFrame(st.session_state.opt_history)
-if not df_opt.empty:
-    st.line_chart(df_opt.set_index("time")[["spot_delta", "ce_delta", "pe_delta"]])
-    st.dataframe(df_opt.tail(20))
+    st.subheader("📈 CE vs PE Premium Movement (ATM 5)")
+    plt.figure(figsize=(12,5))
+    for strike in latest["strike"]:
+        df_strike = df_history[df_history["strike"]==strike]
+        plt.plot(df_strike["time"], df_strike["CE"], label=f"CE {strike}", marker='o')
+        plt.plot(df_strike["time"], df_strike["PE"], label=f"PE {strike}", marker='x')
+    plt.xlabel("Time")
+    plt.ylabel("Premium (₹)")
+    plt.title("ATM 5 CE/PE Premiums Over Time")
+    plt.legend()
+    plt.grid(True)
+    st.pyplot(plt)
 
 st.markdown("---")
 
-# -----------------------------------------------------
-# OI TRACKER (ATM 5)
-# -----------------------------------------------------
+# ---------------- OI TRACKER (Original Code) ----------------
 st.header("📊 ATM 5 Strike OI Tracker")
-
 OI_FILE = "oi_history_change.csv"
 
 def load_oi_history():
     if os.path.exists(OI_FILE):
         df = pd.read_csv(OI_FILE)
-        if df.empty or df["date"].iloc[-1] != str(today):
+        if df.empty or df["date"].iloc[-1]!=str(today):
             return pd.DataFrame(columns=["date","time","CE_change","PE_change","CE_OI_total","PE_OI_total"])
         return df
     return pd.DataFrame(columns=[])
@@ -261,18 +198,17 @@ if data_oi:
 
     rows = []
     for r in records:
-        if r.get("expiryDate") == expiry and r.get("CE") and r.get("PE"):
-            ce = r.get("CE", {})
-            pe = r.get("PE", {})
+        if r.get("expiryDate")==expiry and r.get("CE") and r.get("PE"):
+            ce = r.get("CE",{})
+            pe = r.get("PE",{})
             rows.append({
                 "strike": r["strikePrice"],
-                "CE_change": ce.get("changeinOpenInterest", 0),
-                "PE_change": pe.get("changeinOpenInterest", 0),
-                "CE_OI": ce.get("openInterest", 0),
-                "PE_OI": pe.get("openInterest", 0),
-                "diff": abs(r["strikePrice"] - underlying)
+                "CE_change": ce.get("changeinOpenInterest",0),
+                "PE_change": pe.get("changeinOpenInterest",0),
+                "CE_OI": ce.get("openInterest",0),
+                "PE_OI": pe.get("openInterest",0),
+                "diff": abs(r["strikePrice"]-underlying)
             })
-
     df_atm = pd.DataFrame(rows).sort_values("diff").head(5)
     st.write("### ATM 5 OI Table")
     st.dataframe(df_atm)
@@ -292,20 +228,17 @@ if data_oi:
     st.metric("CE Change (ATM 5)", snap["CE_change"])
     st.metric("PE Change (ATM 5)", snap["PE_change"])
 
-    # Change OI Chart
     if not oi_history.empty:
         st.write("### 📈 Change in OI (CE vs PE)")
-        plt.figure(figsize=(10, 4))
+        plt.figure(figsize=(10,4))
         plt.plot(oi_history["time"], oi_history["CE_change"], marker='o', label="CE Change")
         plt.plot(oi_history["time"], oi_history["PE_change"], marker='o', label="PE Change")
         plt.grid(True)
         plt.legend()
         st.pyplot(plt)
 
-    # Total OI Chart
-    if "CE_OI_total" in oi_history.columns:
         st.write("### 📉 Total OI (CE vs PE)")
-        plt.figure(figsize=(10, 4))
+        plt.figure(figsize=(10,4))
         plt.plot(oi_history["time"], oi_history["CE_OI_total"], marker='o', label="CE Total OI")
         plt.plot(oi_history["time"], oi_history["PE_OI_total"], marker='o', label="PE Total OI")
         plt.grid(True)
