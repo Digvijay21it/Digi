@@ -168,21 +168,20 @@ def get_atm_5_option_lastprice(symbol="NIFTY"):
         records = data["records"]["data"]
         current_week_expiry = data["records"]["expiryDates"][0]
 
+        # Filter for current week expiry and valid CE/PE
+        rows = [r for r in records if r.get("expiryDate") == current_week_expiry and r.get("CE") and r.get("PE")]
+
+        # Determine ATM strike and select 5 closest strikes
         atm_strike = int(round(spot / 50) * 50)
-        # Filter current week expiry rows
-        rows = [r for r in records if r.get("expiryDate") == current_week_expiry]
-        # Sort by distance to ATM strike
         rows.sort(key=lambda x: abs(x["strikePrice"] - atm_strike))
         atm_5 = rows[:5]
 
         prices = []
         for r in atm_5:
-            ce = r.get("CE", {}).get("lastPrice")
-            pe = r.get("PE", {}).get("lastPrice")
             prices.append({
                 "strike": r["strikePrice"],
-                "CE": float(ce) if ce else None,
-                "PE": float(pe) if pe else None
+                "CE": float(r["CE"]["lastPrice"]) if r["CE"]["lastPrice"] is not None else 0,
+                "PE": float(r["PE"]["lastPrice"]) if r["PE"]["lastPrice"] is not None else 0
             })
         return prices
     except:
@@ -200,14 +199,16 @@ def update_option_history_atm5():
     # Initialize first open values
     if st.session_state.open_spot is None:
         st.session_state.open_spot = spot
-        st.session_state.open_ce = sum([x["CE"] for x in atm_prices if x["CE"] is not None])
-        st.session_state.open_pe = sum([x["PE"] for x in atm_prices if x["PE"] is not None])
+        st.session_state.open_ce = sum([x["CE"] for x in atm_prices])
+        st.session_state.open_pe = sum([x["PE"] for x in atm_prices])
 
     # Compute deltas
     spot_delta = spot - st.session_state.open_spot
-    ce_delta = sum([x["CE"] for x in atm_prices if x["CE"] is not None]) - st.session_state.open_ce
-    pe_delta = abs(sum([x["PE"] for x in atm_prices if x["PE"] is not None]) - st.session_state.open_pe)  # MAKE +VE
+    ce_delta = sum([x["CE"] for x in atm_prices]) - st.session_state.open_ce
+    pe_delta = sum([x["PE"] for x in atm_prices]) - st.session_state.open_pe
+    pe_delta = abs(pe_delta)  # Make positive
 
+    # Append to session history
     st.session_state.opt_history.append({
         "time": datetime.now(IST),
         "spot_delta": spot_delta,
@@ -215,11 +216,13 @@ def update_option_history_atm5():
         "pe_delta": pe_delta
     })
 
+    # Save to CSV
     pd.DataFrame(st.session_state.opt_history).to_csv(CSV_FILE, index=False)
 
 # ---------------- UPDATE HISTORY ----------------
 update_option_history_atm5()
 
+# ---------------- DISPLAY ----------------
 df_opt = pd.DataFrame(st.session_state.opt_history)
 if not df_opt.empty:
     st.line_chart(df_opt.set_index("time")[["spot_delta", "ce_delta", "pe_delta"]])
@@ -228,7 +231,7 @@ if not df_opt.empty:
 st.markdown("---")
 
 # -----------------------------------------------------
-# OI TRACKER (remains unchanged)
+# OI TRACKER (ATM 5)
 # -----------------------------------------------------
 st.header("📊 ATM 5 Strike OI Tracker")
 
@@ -258,7 +261,7 @@ if data_oi:
 
     rows = []
     for r in records:
-        if r.get("expiryDate") == expiry:
+        if r.get("expiryDate") == expiry and r.get("CE") and r.get("PE"):
             ce = r.get("CE", {})
             pe = r.get("PE", {})
             rows.append({
