@@ -88,7 +88,7 @@ cols[2].metric("SENSEX", f"{sensex}" if sensex else "N/A", f"{pct_sensex:+.2f}%"
 st.markdown("---")
 
 # ====================================================================
-#          🔥 REPLACED ATM SECTION — NEW LOGIC WITH FIX
+#          🔥 ATM SECTION
 # ====================================================================
 st.header("📈 ATM Normalized Movement (NIFTY vs CE vs PE)")
 
@@ -97,7 +97,6 @@ DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 CSV_FILE_ATM = os.path.join(DATA_DIR, f"atm_compare_{today}.csv")
 
-# -------- Get ATM Strike Details --------
 def get_atm_prices():
     try:
         url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
@@ -115,23 +114,20 @@ def get_atm_prices():
     except:
         return None, None, None
 
-# -------- Update intraday history (with after-market fix) --------
 def update_atm_history():
     now = datetime.now(IST)
 
-    # Load existing history if present
     if os.path.exists(CSV_FILE_ATM):
         df_existing = pd.read_csv(CSV_FILE_ATM, parse_dates=["time"])
     else:
         df_existing = pd.DataFrame()
 
-    # Market hours check
-    market_open = (now.hour >= 9 and (now.hour < 15 or (now.hour == 15 and now.minute <= 30)))
+    market_open = (now.hour >= 9 and (now.hour < 16))
 
     if market_open:
         underlying, ce, pe = get_atm_prices()
         if underlying is None:
-            return df_existing  # return old data instead of empty
+            return df_existing
 
         entry = {
             "time": now,
@@ -148,7 +144,6 @@ def update_atm_history():
         df.to_csv(CSV_FILE_ATM, index=False)
         return df
 
-    # AFTER MARKET CLOSE → return last available data
     return df_existing
 
 df_atm = update_atm_history()
@@ -156,7 +151,6 @@ df_atm = update_atm_history()
 if df_atm.empty:
     st.error("No ATM data available for today.")
 else:
-    # ---- Normalize to 0 at 9:15 ----
     df_norm = df_atm.copy()
 
     base_n = df_norm["NIFTY"].iloc[0]
@@ -181,9 +175,8 @@ else:
 
 st.markdown("---")
 
-
 # ====================================================================
-#                     ORIGINAL OI TRACKER BELOW (UNTOUCHED)
+#                     UPDATED OI TRACKER (WITH FIX)
 # ====================================================================
 st.header("📊 ATM 5 Strike OI Tracker")
 OI_FILE = "oi_history_change.csv"
@@ -191,8 +184,8 @@ OI_FILE = "oi_history_change.csv"
 def load_oi_history():
     if os.path.exists(OI_FILE):
         df = pd.read_csv(OI_FILE)
-        if df.empty or df["date"].iloc[-1]!=str(today):
-            return pd.DataFrame(columns=["date","time","CE_change","PE_change","CE_OI_total","PE_OI_total"])
+        if df.empty or df["date"].iloc[-1] != str(today):
+            return pd.DataFrame(columns=["date", "time", "CE_change", "PE_change", "CE_OI_total", "PE_OI_total"])
         return df
     return pd.DataFrame(columns=[])
 
@@ -212,39 +205,44 @@ if data_oi:
 
     rows = []
     for r in records:
-        if r.get("expiryDate")==expiry and r.get("CE") and r.get("PE"):
-            ce = r.get("CE",{})
-            pe = r.get("PE",{})
+        if r.get("expiryDate") == expiry and r.get("CE") and r.get("PE"):
+            ce = r.get("CE", {})
+            pe = r.get("PE", {})
             rows.append({
                 "strike": r["strikePrice"],
-                "CE_change": ce.get("changeinOpenInterest",0),
-                "PE_change": pe.get("changeinOpenInterest",0),
-                "CE_OI": ce.get("openInterest",0),
-                "PE_OI": pe.get("openInterest",0),
-                "diff": abs(r["strikePrice"]-underlying)
+                "CE_change": ce.get("changeinOpenInterest", 0),
+                "PE_change": pe.get("changeinOpenInterest", 0),
+                "CE_OI": ce.get("openInterest", 0),
+                "PE_OI": pe.get("openInterest", 0),
+                "diff": abs(r["strikePrice"] - underlying)
             })
     df_atm = pd.DataFrame(rows).sort_values("diff").head(5)
     st.write("### ATM 5 OI Table")
     st.dataframe(df_atm)
 
-    snap = {
-        "date": str(today),
-        "time": datetime.now(IST).strftime("%H:%M"),
-        "CE_change": df_atm["CE_change"].sum(),
-        "PE_change": df_atm["PE_change"].sum(),
-        "CE_OI_total": df_atm["CE_OI"].sum(),
-        "PE_OI_total": df_atm["PE_OI"].sum()
-    }
+    # -------------------- FIX APPLIED HERE --------------------
+    now = datetime.now(IST)
+    if not (now.hour >= 9 and now.hour < 16):
+        st.warning("Outside market hours — OI data not recorded.")
+    else:
+        snap = {
+            "date": str(today),
+            "time": now.strftime("%H:%M"),
+            "CE_change": df_atm["CE_change"].sum(),
+            "PE_change": df_atm["PE_change"].sum(),
+            "CE_OI_total": df_atm["CE_OI"].sum(),
+            "PE_OI_total": df_atm["PE_OI"].sum()
+        }
 
-    oi_history = pd.concat([oi_history, pd.DataFrame([snap])], ignore_index=True)
-    oi_history.to_csv(OI_FILE, index=False)
+        oi_history = pd.concat([oi_history, pd.DataFrame([snap])], ignore_index=True)
+        oi_history.to_csv(OI_FILE, index=False)
 
-    st.metric("CE Change (ATM 5)", snap["CE_change"])
-    st.metric("PE Change (ATM 5)", snap["PE_change"])
+    st.metric("CE Change (ATM 5)", df_atm["CE_change"].sum())
+    st.metric("PE Change (ATM 5)", df_atm["PE_change"].sum())
 
     if not oi_history.empty:
         st.write("### 📈 Change in OI (CE vs PE)")
-        plt.figure(figsize=(10,4))
+        plt.figure(figsize=(10, 4))
         plt.plot(oi_history["time"], oi_history["CE_change"], marker='o', label="CE Change")
         plt.plot(oi_history["time"], oi_history["PE_change"], marker='o', label="PE Change")
         plt.grid(True)
@@ -252,7 +250,7 @@ if data_oi:
         st.pyplot(plt)
 
         st.write("### 📉 Total OI (CE vs PE)")
-        plt.figure(figsize=(10,4))
+        plt.figure(figsize=(10, 4))
         plt.plot(oi_history["time"], oi_history["CE_OI_total"], marker='o', label="CE Total OI")
         plt.plot(oi_history["time"], oi_history["PE_OI_total"], marker='o', label="PE Total OI")
         plt.grid(True)
