@@ -8,9 +8,10 @@ import os
 import pytz
 
 # -------------------------------
-# TIMEZONE FIX
+# TIMEZONE FIX (GUARANTEED)
 # -------------------------------
 IST = pytz.timezone("Asia/Kolkata")
+
 
 # -----------------------------------------------------
 # STREAMLIT CONFIG
@@ -39,6 +40,7 @@ def get_nse_session():
     return s
 
 session = get_nse_session()
+
 
 # -----------------------------------------------------
 # STOCK DETAILS (SAFE VERSION)
@@ -70,6 +72,7 @@ def get_stock_details(symbol):
     except:
         return None, None
 
+
 # -----------------------------------------------------
 # INDEX DETAILS (SAFE VERSION)
 # -----------------------------------------------------
@@ -82,7 +85,7 @@ def get_index_details(index_name):
                 openp = idx.get("open")
                 if last is None or openp is None:
                     return None, None
-                pct = ((last - openp) / openp) * 100 if openp else None
+                pct = ((last - openp) / openp) * 100
                 return last, pct
     except:
         return None, None
@@ -141,6 +144,7 @@ else:
 
 st.markdown("---")
 
+
 # -----------------------------------------------------
 # OPTION MOMENTUM
 # -----------------------------------------------------
@@ -170,15 +174,20 @@ def get_option_chain(symbol="NIFTY", strike=None):
     except:
         return None, None
 
+
 today = date.today()
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 CSV_FILE = os.path.join(DATA_DIR, f"nifty_data_{today}.csv")
 
-# ---------- INITIALIZE SESSION STATE ----------
+
+# -----------------------------------------------------
+# INITIALIZE SESSION STATE (CSV IS NOW TZ-AWARE)
+# -----------------------------------------------------
 if "opt_history" not in st.session_state:
     if os.path.exists(CSV_FILE):
-        df_tmp = pd.read_csv(CSV_FILE, parse_dates=["time"])
+        df_tmp = pd.read_csv(CSV_FILE)
+        df_tmp["time"] = pd.to_datetime(df_tmp["time"], utc=True).dt.tz_convert("Asia/Kolkata")
         st.session_state.opt_history = df_tmp.to_dict("records")
     else:
         st.session_state.opt_history = []
@@ -192,8 +201,9 @@ if "open_ce" not in st.session_state:
 if "open_pe" not in st.session_state:
     st.session_state.open_pe = None
 
+
 # -----------------------------------------------------
-# UPDATE OPTION HISTORY
+# UPDATE OPTION HISTORY (SAVE IST AS ISO8601)
 # -----------------------------------------------------
 def update_option_history():
     spot = get_spot_price()
@@ -215,7 +225,7 @@ def update_option_history():
     pe_delta = pe - st.session_state.open_pe
 
     st.session_state.opt_history.append({
-        "time": datetime.now(IST),
+        "time": datetime.now(IST).isoformat(),
         "spot_delta": spot_delta,
         "ce_delta": ce_delta,
         "pe_delta": pe_delta
@@ -223,15 +233,23 @@ def update_option_history():
 
     pd.DataFrame(st.session_state.opt_history).to_csv(CSV_FILE, index=False)
 
+
 # Auto update once per refresh
 update_option_history()
 
-df_opt = pd.DataFrame(st.session_state.opt_history)
-if not df_opt.empty:
+
+# -----------------------------------------------------
+# DISPLAY OPTION MOMENTUM
+# -----------------------------------------------------
+if st.session_state.opt_history:
+    df_opt = pd.DataFrame(st.session_state.opt_history)
+    df_opt["time"] = pd.to_datetime(df_opt["time"], utc=True).dt.tz_convert("Asia/Kolkata")
+
     st.line_chart(df_opt.set_index("time")[["spot_delta", "ce_delta", "pe_delta"]])
     st.dataframe(df_opt.tail(20))
 
 st.markdown("---")
+
 
 # -----------------------------------------------------
 # OI TRACKER
@@ -240,21 +258,23 @@ st.header("📊 ATM 5 Strike OI Tracker")
 
 OI_FILE = "oi_history_change.csv"
 
+
 def load_oi_history():
     if os.path.exists(OI_FILE):
         df = pd.read_csv(OI_FILE)
-        if df.empty or df["date"].iloc[-1] != str(today):
-            return pd.DataFrame(columns=["date","time","CE_change","PE_change","CE_OI_total","PE_OI_total"])
         return df
-    return pd.DataFrame(columns=[])
+    return pd.DataFrame(columns=["date","time","CE_change","PE_change","CE_OI_total","PE_OI_total"])
+
 
 oi_history = load_oi_history()
+
 
 def fetch_oi():
     try:
         return session.get("https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY", timeout=5).json()
     except:
         return None
+
 
 data_oi = fetch_oi()
 
@@ -296,22 +316,22 @@ if data_oi:
     st.metric("CE Change (ATM 5)", snap["CE_change"])
     st.metric("PE Change (ATM 5)", snap["PE_change"])
 
+
     # Change OI Chart
-    if not oi_history.empty:
-        st.write("### 📈 Change in OI (CE vs PE)")
-        plt.figure(figsize=(10, 4))
-        plt.plot(oi_history["time"], oi_history["CE_change"], marker='o', label="CE Change")
-        plt.plot(oi_history["time"], oi_history["PE_change"], marker='o', label="PE Change")
-        plt.grid(True)
-        plt.legend()
-        st.pyplot(plt)
+    st.write("### 📈 Change in OI (CE vs PE)")
+    plt.figure(figsize=(10, 4))
+    plt.plot(oi_history["time"], oi_history["CE_change"], marker='o', label="CE Change")
+    plt.plot(oi_history["time"], oi_history["PE_change"], marker='o', label="PE Change")
+    plt.grid(True)
+    plt.legend()
+    st.pyplot(plt)
+
 
     # Total OI Chart
-    if "CE_OI_total" in oi_history.columns:
-        st.write("### 📉 Total OI (CE vs PE)")
-        plt.figure(figsize=(10, 4))
-        plt.plot(oi_history["time"], oi_history["CE_OI_total"], marker='o', label="CE Total OI")
-        plt.plot(oi_history["time"], oi_history["PE_OI_total"], marker='o', label="PE Total OI")
-        plt.grid(True)
-        plt.legend()
-        st.pyplot(plt)
+    st.write("### 📉 Total OI (CE vs PE)")
+    plt.figure(figsize=(10, 4))
+    plt.plot(oi_history["time"], oi_history["CE_OI_total"], marker='o', label="CE Total OI")
+    plt.plot(oi_history["time"], oi_history["PE_OI_total"], marker='o', label="PE Total OI")
+    plt.grid(True)
+    plt.legend()
+    st.pyplot(plt)
