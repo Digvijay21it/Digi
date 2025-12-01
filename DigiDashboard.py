@@ -87,13 +87,15 @@ cols[2].metric("SENSEX", f"{sensex}" if sensex else "N/A", f"{pct_sensex:+.2f}%"
 
 st.markdown("---")
 
-# ---------------- ATM 5 CE/PE PREMIUMS ----------------
-st.header("📈 ATM 5 CE/PE Premiums (Current Week)")
+# ====================================================================
+#          🔥 ATM 5 CE * SUM & PE * SUM (Premium Comparison)
+# ====================================================================
+st.header("📈 ATM 5 TOTAL CE/PE PREMIUM (Current Week)")
 
 today = datetime.now(IST).date()
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
-CSV_FILE = os.path.join(DATA_DIR, f"atm5_premiums_{today}.csv")
+CSV_FILE = os.path.join(DATA_DIR, f"atm5_sum_{today}.csv")
 
 def get_spot_price():
     try:
@@ -104,73 +106,78 @@ def get_spot_price():
     except:
         return None
 
-def get_atm_5_premiums(symbol="NIFTY"):
+def get_atm5_sum(symbol="NIFTY"):
     spot = get_spot_price()
     if spot is None:
-        return []
+        return None, None
+
     try:
-        data = session.get(f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}", timeout=5).json()
+        data = session.get(
+            f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}",
+            timeout=5
+        ).json()
+
         records = data["records"]["data"]
         expiry = data["records"]["expiryDates"][0]
 
-        rows = [r for r in records if r.get("expiryDate")==expiry and r.get("CE") and r.get("PE")]
-        atm_strike = int(round(spot/50)*50)
-        rows.sort(key=lambda x: abs(x["strikePrice"]-atm_strike))
+        atm_strike = int(round(spot / 50) * 50)
+
+        rows = [
+            r for r in records 
+            if r.get("expiryDate") == expiry and r.get("CE") and r.get("PE")
+        ]
+
+        rows.sort(key=lambda x: abs(x["strikePrice"] - atm_strike))
+
         atm_5 = rows[:5]
 
-        premiums = []
-        for r in atm_5:
-            premiums.append({
-                "time": datetime.now(IST),
-                "strike": r["strikePrice"],
-                "CE": r["CE"]["lastPrice"],
-                "PE": r["PE"]["lastPrice"]
-            })
-        return premiums
-    except:
-        return []
+        total_ce = sum(r["CE"]["lastPrice"] for r in atm_5)
+        total_pe = sum(r["PE"]["lastPrice"] for r in atm_5)
 
-def update_premium_history():
-    atm_5 = get_atm_5_premiums()
-    if not atm_5:
+        return total_ce, total_pe
+
+    except:
+        return None, None
+
+# --------- UPDATE HISTORY ---------
+def update_sum_history():
+    ce_sum, pe_sum = get_atm5_sum()
+    if ce_sum is None:
         return pd.DataFrame()
-    df = pd.DataFrame(atm_5)
+
+    entry = {
+        "time": datetime.now(IST),
+        "CE_Sum": ce_sum,
+        "PE_Sum": pe_sum
+    }
+
     if os.path.exists(CSV_FILE):
-        df_history = pd.read_csv(CSV_FILE, parse_dates=["time"])
-        df = pd.concat([df_history, df], ignore_index=True)
+        df = pd.read_csv(CSV_FILE, parse_dates=["time"])
+        df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+    else:
+        df = pd.DataFrame([entry])
+
     df.to_csv(CSV_FILE, index=False)
     return df
 
-# Update and display
-spot_price = get_spot_price()
-if spot_price:
-    st.metric("NIFTY 50 Spot Price", f"₹{spot_price}")
+df_sum = update_sum_history()
 
-df_history = update_premium_history()
-
-if df_history.empty:
-    st.write("Failed to fetch option chain data.")
+if df_sum.empty:
+    st.error("Unable to fetch option chain data")
 else:
-    latest = df_history.groupby("strike").last().reset_index()
-    st.subheader("📌 Latest ATM 5 CE/PE Premiums")
-    st.dataframe(latest[["strike","CE","PE"]])
+    latest = df_sum.iloc[-1]
 
-    st.subheader("📈 CE vs PE Premium Movement (ATM 5)")
-    plt.figure(figsize=(12,5))
-    for strike in latest["strike"]:
-        df_strike = df_history[df_history["strike"]==strike]
-        plt.plot(df_strike["time"], df_strike["CE"], label=f"CE {strike}", marker='o')
-        plt.plot(df_strike["time"], df_strike["PE"], label=f"PE {strike}", marker='x')
-    plt.xlabel("Time")
-    plt.ylabel("Premium (₹)")
-    plt.title("ATM 5 CE/PE Premiums Over Time")
-    plt.legend()
-    plt.grid(True)
-    st.pyplot(plt)
+    st.metric("Total CE Premium (ATM 5)", f"₹{latest['CE_Sum']:.2f}")
+    st.metric("Total PE Premium (ATM 5)", f"₹{latest['PE_Sum']:.2f}")
+
+    st.write("### 📈 ATM 5 Premium Sum Chart (CE vs PE)")
+    st.line_chart(df_sum.set_index("time")[["CE_Sum", "PE_Sum"]])
 
 st.markdown("---")
 
-# ---------------- OI TRACKER (Original Code) ----------------
+# ====================================================================
+#                     ORIGINAL OI TRACKER BELOW
+# ====================================================================
 st.header("📊 ATM 5 Strike OI Tracker")
 OI_FILE = "oi_history_change.csv"
 
